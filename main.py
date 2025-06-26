@@ -29,7 +29,7 @@ print("Using device:", device)
 config = {
     "sequence_length": 20,              # How many time steps the model sees at once
     "future": 1,                        # How many steps into the future to predict
-    "test_ratio": 0.2, # Train/test split
+    "test_ratio": 0.25, # Train/test split
    
    #temporal settings
     "temporal_batch_size": 64,                   # For both train and test loaders
@@ -42,9 +42,9 @@ config = {
     #spatial settings
     "spatial_batch_size": 64,                   # For both train and test loaders
     "spatial_epochs": 2,                       # Number of training epochs
-    "spatial_hidden_dim": 64,                   # Hidden representation size
-    "spatial_num_heads": 4,                     # Attention heads
-    "spatial_num_layers": 3,                    # Transformer depth
+    "spatial_hidden_dim": 32,                   # Hidden representation size
+    "spatial_num_heads": 2,                     # Attention heads
+    "spatial_num_layers": 1,                    # Transformer depth
     "spatial_dropout": 0.1,
     
     "num_rooms": 5                      # R1–R5
@@ -187,7 +187,7 @@ import torch.nn as nn
 
 #  Temporal Transformer Encoder for One Room
 class TemporalTransformerEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_heads, num_layers):
+    def __init__(self, input_dim, hidden_dim, num_heads, num_layers, dropout):
       #input_dim: number of features per time step
       #hidden_dim: size the Transformer will use internally
       #num_heads: how many attention heads for better learning
@@ -204,7 +204,7 @@ class TemporalTransformerEncoder(nn.Module):
             d_model=hidden_dim, #the size of each hidden vector
             nhead=num_heads,#number of attention heads
             dim_feedforward=hidden_dim * 2,#the internal layer size inside the transformer
-            dropout=config["temporal_dropout"],#randomly turn off 10% of the neurons during training to avoid overfitting
+            dropout=dropout,#randomly turn off 10% of the neurons during training to avoid overfitting
             batch_first=True
         )
 
@@ -220,12 +220,12 @@ class TemporalTransformerEncoder(nn.Module):
 
 #  Spatial- Model for Multiple Rooms
 class MultiRoomTransformerModel(nn.Module):
-    def __init__(self, input_dim, seq_len, temporal_hidden_dim, temporal_num_heads, temporal_num_layers, num_rooms,spatial_hidden_dim, spatial_num_heads,spatial_num_layers):
+    def __init__(self, input_dim, seq_len, temporal_hidden_dim, temporal_num_heads, temporal_num_layers, num_rooms,spatial_hidden_dim, spatial_num_heads,spatial_num_layers, temporal_dropout, spatial_dropout):
         super().__init__()
 
         # One encoder for each room to learn time patterns. These learn time patterns inside each room.
         self.room_encoders = nn.ModuleList([
-            TemporalTransformerEncoder(input_dim, temporal_hidden_dim, temporal_num_heads, temporal_num_layers)
+            TemporalTransformerEncoder(input_dim, temporal_hidden_dim, temporal_num_heads, temporal_num_layers, temporal_dropout)
             for _ in range(num_rooms)
         ])
 
@@ -252,11 +252,12 @@ class MultiRoomTransformerModel(nn.Module):
             d_model=spatial_hidden_dim,
             nhead=spatial_num_heads,
             dim_feedforward=spatial_hidden_dim * 2,
-            dropout=config["spatial_dropout"],
+            dropout=spatial_dropout,
             batch_first=True
         )
         # This part looks at all rooms together
         # It helps the model learn how rooms affect each other
+  
         self.spatial_encoder = nn.TransformerEncoder(spatial_encoder_layer, num_layers=spatial_num_layers)
     
         # After combining room info, this layer makes the final prediction
@@ -265,16 +266,24 @@ class MultiRoomTransformerModel(nn.Module):
     def forward(self, x):  # x: (batch, num_rooms, seq_len, input_dim)
      #takes input x which is a batch of sensor data for all rooms.
         batch_size, num_rooms, seq_len, input_dim = x.shape
+       
+
 
         room_contexts = []      # store one summary from each room to combine later
         temporal_predictions = []  # store predictions for each room
 
         for r in range(num_rooms):#Loops through each room and gets its data from the input.
+           
             x_room = x[:, r] # get data for one room(batch, seq-length, features_num)
             encoded = self.room_encoders[r](x_room) #Passes that room's data through its Transformer to learn time patterns.
+           
             #Takes the average over all time steps to get a summary vector for that room and saves it.
             pooled = encoded.mean(dim=1) # get summary for this room
-            room_contexts.append(self.temporal_to_spatial(pooled)) # (batch, spatial_hidden_dim)
+           
+
+            projected= self.temporal_to_spatial(pooled)
+          
+            room_contexts.append(projected) # (batch, spatial_hidden_dim)
 
             #Flattens the encoded output and uses the room’s small network to make a prediction
             temporal_pred = self.temporal_heads[r](encoded).squeeze(-1)
@@ -282,6 +291,7 @@ class MultiRoomTransformerModel(nn.Module):
 
         # Combine all room summaries into one big tensor
         context_tensor = torch.stack(room_contexts, dim=1)  #shape: (batch, num_rooms, hidden_dim)
+        
 
         # Combine room info so model can understand how rooms affect each other
         # This is like letting the rooms know about each other
@@ -362,7 +372,9 @@ multi_room_model = MultiRoomTransformerModel(
     num_rooms=config["num_rooms"],
     spatial_hidden_dim=config["spatial_hidden_dim"],
     spatial_num_heads=config["spatial_num_heads"],
-    spatial_num_layers=config["spatial_num_layers"]
+    spatial_num_layers=config["spatial_num_layers"],
+    temporal_dropout=config["temporal_dropout"],
+    spatial_dropout=config["spatial_dropout"]
 ).to(device)
 
 # LOAD A MINI-BATCH FROM TRAINING DATA
@@ -435,7 +447,7 @@ def train_and_plot_single_room(room_id, input_seq_len, feature_dim, hidden_dim, 
 
     # Build model
     # Transformer encoder for time-series data (learns patterns over time)
-    encoder = TemporalTransformerEncoder(feature_dim, hidden_dim, num_heads, num_layers).to(device)
+    encoder = TemporalTransformerEncoder(feature_dim, hidden_dim, num_heads, num_layers,config["temporal_dropout"] ).to(device)
 
     # Prediction head: fully connected layers that turn transformer output into a single number
     head = nn.Sequential(
@@ -519,7 +531,7 @@ def train_and_plot_single_room(room_id, input_seq_len, feature_dim, hidden_dim, 
     with open(summary_txt, "a") as f:
         f.write(f"{room_id}\tRMSE: {rmse:.4f}\tMAE: {mae:.4f}\tR²: {r2:.4f}\n")
 with open(summary_txt, "a") as f:
-    f.write("\n=== TEMPORAL (Single-Room) Transformer Evaluation ===\n")       
+    f.write("\n TEMPORAL (Single-Room) Transformer Evaluation \n")       
 for room_id in file_paths.keys():
     train_and_plot_single_room(
         room_id=room_id,
@@ -831,6 +843,8 @@ def plot_room_dependency_heatmap(model, input_batch, room_names=None, save=True,
             encoded = model.room_encoders[r](x_room)  # (batch, seq_len, hidden_dim)
             pooled = encoded.mean(dim=1)  # (batch, hidden_dim)
             room_contexts.append(pooled)
+
+        room_contexts = [model.temporal_to_spatial(c) for c in room_contexts]
 
         # Stack into (batch, num_rooms, hidden_dim)
         context_tensor = torch.stack(room_contexts, dim=1)
