@@ -27,13 +27,13 @@ print("Using device:", device)
 
 # === HYPERPARAMETERS ===
 config = {
-    "sequence_length": 20,              # How many time steps the model sees at once
+    "sequence_length": 60,              # How many time steps the model sees at once
     "future": 1,                        # How many steps into the future to predict
     "test_ratio": 0.25, # Train/test split
    
    #temporal settings
     "temporal_batch_size": 64,                   # For both train and test loaders
-    "temporal_epochs": 2,                       # Number of training epochs
+    "temporal_epochs": 30,                       # Number of training epochs
     "temporal_hidden_dim": 64,                   # Hidden representation size
     "temporal_num_heads": 4,                     # Attention heads
     "temporal_num_layers": 3,               # Transformer depth
@@ -41,7 +41,7 @@ config = {
         
     #spatial settings
     "spatial_batch_size": 64,                   # For both train and test loaders
-    "spatial_epochs": 2,                       # Number of training epochs
+    "spatial_epochs": 30,                       # Number of training epochs
     "spatial_hidden_dim": 32,                   # Hidden representation size
     "spatial_num_heads": 2,                     # Attention heads
     "spatial_num_layers": 1,                    # Transformer depth
@@ -69,8 +69,6 @@ DATA_DIR = "training_data"
 csv_files = sorted(glob.glob(os.path.join(DATA_DIR,"*.csv")))
 file_paths = {f"R{i+1}": csv_files[i] for i in range(min(5, len(csv_files)))}
 room_list = list(file_paths.keys()) 
-
-
 target_column = 'occupant_count [number]'
 room_data = {}
 
@@ -93,7 +91,7 @@ scalers = {}
 
 for room, df in room_data.items():
     print(f"\n Scaling data for {room} ")
-
+    
     # Separate features and target
     features = df.drop(columns=excluded_columns)
     target = df[target_column]
@@ -345,9 +343,6 @@ train_loader = DataLoader(train_dataset, batch_size=config["spatial_batch_size"]
 test_dataset = MultiRoomDataset(room_sequences, room_list, is_train=False)
 test_loader = DataLoader(test_dataset, batch_size=config["spatial_batch_size"], shuffle=False)# shuffle=False for consistent evaluation
 
-
-
-
 # MODEL HYPERPARAMETERS
 num_sensor_features = room_scaled_data['R1']['X'].shape[1]   # Total number of features per timestep it is ok to have only room1 because all rooms R1–R5 have the same number of sensor features
 
@@ -436,12 +431,10 @@ def train_and_plot_single_room(room_id, input_seq_len, feature_dim, hidden_dim, 
     y_train = torch.tensor(room_sequences[room_id]['y_train'], dtype=torch.float32).to(device)
     X_test = torch.tensor(room_sequences[room_id]['X_test'], dtype=torch.float32).to(device)
     y_test = torch.tensor(room_sequences[room_id]['y_test'], dtype=torch.float32).to(device)
-
     
     print(f"{room_id} - X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
     print(f"{room_id} - X_test shape: {X_test.shape}, y_test shape: {y_test.shape}")
     
-
     # Combine training data into a PyTorch DataLoader for batch training
     train_loader = DataLoader(torch.utils.data.TensorDataset(X_train, y_train), batch_size=config["temporal_batch_size"], shuffle=True)
 
@@ -519,7 +512,6 @@ def train_and_plot_single_room(room_id, input_seq_len, feature_dim, hidden_dim, 
     temporal_preds[room_id] = all_test_preds[:100]
     temporal_actuals[room_id] = y_test_np[:100]
 
-    
     # 4. Final evaluation metrics
     rmse = np.sqrt(mean_squared_error(y_test_np, all_test_preds))
     mae = mean_absolute_error(y_test_np, all_test_preds)
@@ -531,7 +523,7 @@ def train_and_plot_single_room(room_id, input_seq_len, feature_dim, hidden_dim, 
     with open(summary_txt, "a") as f:
         f.write(f"{room_id}\tRMSE: {rmse:.4f}\tMAE: {mae:.4f}\tR²: {r2:.4f}\n")
 with open(summary_txt, "a") as f:
-    f.write("\n TEMPORAL (Single-Room) Transformer Evaluation \n")       
+    f.write("\n=== TEMPORAL (Single-Room) Transformer Evaluation ===\n")       
 for room_id in file_paths.keys():
     train_and_plot_single_room(
         room_id=room_id,
@@ -739,7 +731,6 @@ with open(summary_txt, "a") as f:
     # Write in temporal-style format
     for room_id, rmse, mae, r2 in spatial_results:
         f.write(f"R{room_id}\tRMSE: {rmse:.4f}\tMAE: {mae:.4f}\tR²: {r2:.4f}\n")
-   
 
 def plot_multiroom_loss_subplots(train_losses_per_room, test_losses_per_room, room_names, save_path):
     fig, axs = plt.subplots(3, 2, figsize=(14, 10), sharey=True)
@@ -759,7 +750,6 @@ def plot_multiroom_loss_subplots(train_losses_per_room, test_losses_per_room, ro
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
     plt.close()
-
 
 def plot_multiroom_accuracy_subplots(train_accs_per_room, test_accs_per_room, room_names, save_path):
     fig, axs = plt.subplots(3, 2, figsize=(14, 10), sharey=True)
@@ -875,7 +865,6 @@ def plot_room_dependency_heatmap(model, input_batch, room_names=None, save=True,
 
 # === CALL FUNCTION ===
 plot_room_dependency_heatmap(multi_room_model, X_batch, room_names)
-
 
 # === SAVE RUNTIME INFO ===
 end_time = time.time()
